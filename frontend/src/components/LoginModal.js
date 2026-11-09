@@ -6,6 +6,7 @@ import { toast } from 'react-toastify';
 import { ClipLoader } from 'react-spinners';
 import FloatingLabelInput from './FloatingLabelInput';
 import { Link } from 'react-router-dom';
+import { trackEvent } from '../services/pendo';
 
 const LoginModal = () => {
   const [username, setUsername] = useState('');
@@ -19,6 +20,11 @@ const LoginModal = () => {
     try {
       const { data } = await login({ username, password });
       auth.login(data); // This will update the auth context, causing the modal to disappear
+      // Pendo: successful login from the global login modal on a protected route
+      trackEvent('user_logged_in', {
+        user_id: data.id,
+        login_source: 'login_modal',
+      });
       toast.success("Login successful!");
     } catch (error) {
       toast.error("Invalid username or password.");

@@ -9,6 +9,7 @@ import PhoneInput from 'react-phone-input-2';
 import 'react-phone-input-2/lib/style.css';
 import CountUp from 'react-countup';
 import FloatingLabelInput from '../components/FloatingLabelInput';
+import { trackEvent } from '../services/pendo';
 
 const InvoicePage = () => {
   // === HOOKS & STATE MANAGEMENT ===
@@ -204,6 +205,8 @@ const InvoicePage = () => {
       discount: totals.discountAmount,
     };
 
+    const hasCustomerEmail = Boolean(customer.email);
+
     try {
       const response = await createInvoice(invoiceData);
       if (response.status === 201) {
@@ -211,9 +214,32 @@ const InvoicePage = () => {
       } else if (response.status === 202) {
         toast.warn('Invoice generated, but upload to Drive failed.');
       }
+      // Pendo: invoice persisted by the backend (201 = initial email sent or not needed, 202 = email failed)
+      trackEvent('invoice_created', {
+        invoiceId: response.data.invoiceId,
+        item_count: invoiceItems.length,
+        total_quantity: invoiceItems.reduce((acc, item) => acc + item.quantity, 0),
+        subtotal: Number(totals.subtotal.toFixed(2)),
+        tax: Number(totals.tax.toFixed(2)),
+        discount_amount: Number(totals.discountAmount.toFixed(2)),
+        discount_type: discountType,
+        grand_total: Number(totals.grandTotal.toFixed(2)),
+        has_customer_email: hasCustomerEmail,
+        initial_email_sent: hasCustomerEmail && response.status === 201,
+        response_status: response.status,
+      });
       navigate(`/invoices/${response.data.invoiceId}`);
     } catch (error) {
       const errorMessage = error.response?.data?.details || error.response?.data?.error || "An unknown error occurred.";
+      // Pendo: backend rejected invoice creation
+      trackEvent('invoice_creation_failed', {
+        error_message: String(errorMessage).substring(0, 100),
+        http_status: error.response?.status || 0,
+        item_count: invoiceItems.length,
+        grand_total: Number(totals.grandTotal.toFixed(2)),
+        discount_type: discountType,
+        has_customer_email: hasCustomerEmail,
+      });
       toast.error(`Invoice generation failed: ${errorMessage}`);
     } finally {
       setIsLoading(false);
