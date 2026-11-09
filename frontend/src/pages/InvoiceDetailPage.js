@@ -155,9 +155,9 @@ const InvoiceDetailPage = () => {
         </Link>
         <div className="flex flex-wrap justify-end gap-3">
           <ActionButton onClick={handleDownload} type="download" icon={<Download size={16} />} text="Download" color="bg-blue-500" />
+          {/*<ActionButton onClick={handleSendWhatsApp} type="whatsapp" icon={<MessageSquare size={16} />} text="WhatsApp" color="bg-teal-500" />*/}
           <ActionButton onClick={handleResend} type="resend" icon={<Mail size={16} />} text="Resend Email" color="bg-green-500" />
           <ActionButton onClick={handleUpload} type="upload" icon={<UploadCloud size={16} />} text="Upload to Drive" color="bg-yellow-500" />
-          <ActionButton onClick={handleSendWhatsApp} type="whatsapp" icon={<MessageSquare size={16} />} text="WhatsApp" color="bg-teal-500" />
         </div>
       </header>
 
