@@ -651,6 +651,7 @@ import { toast } from 'react-toastify';
 import { Plus, Save, Trash2, Edit2, XCircle } from 'lucide-react';
 import FloatingLabelInput from '../components/FloatingLabelInput';
 import TableSkeleton from '../components/TableSkeleton';
+import { trackEvent } from '../services/pendo';
 
 const Products = () => {
   const [products, setProducts] = useState([]);
@@ -692,10 +693,29 @@ const Products = () => {
     
     try {
       if (isEditing) {
+        const originalProduct = products.find(p => p.id === currentProduct.id);
         await updateProduct(currentProduct.id, productData, user.token);
+        // Pendo: existing product successfully updated
+        trackEvent('product_updated', {
+          product_id: currentProduct.id,
+          category: productData.category,
+          price: productData.price,
+          tax: productData.tax,
+          price_changed: originalProduct ? parseFloat(originalProduct.price) !== productData.price : false,
+          tax_changed: originalProduct ? parseFloat(originalProduct.tax) !== productData.tax : false,
+          category_changed: originalProduct ? originalProduct.category !== productData.category : false,
+        });
         toast.success(`Product "${productData.name}" updated successfully!`);
       } else {
         await addProduct(productData, user.token);
+        // Pendo: new product successfully added to the catalog
+        trackEvent('product_created', {
+          category: productData.category,
+          is_new_category: !categories.includes(productData.category),
+          price: productData.price,
+          tax: productData.tax,
+          catalog_size: products.length + 1,
+        });
         toast.success(`Product "${productData.name}" added successfully!`);
       }
       resetForm();
@@ -714,7 +734,15 @@ const Products = () => {
 
   const handleDelete = async (id, name) => {
     if (window.confirm(`Are you sure you want to delete "${name}"?`)) {
+      const deletedProduct = products.find(p => p.id === id);
       await deleteProduct(id, user.token);
+      // Pendo: product deletion confirmed by the user and completed by the API
+      trackEvent('product_deleted', {
+        product_id: id,
+        category: deletedProduct?.category,
+        price: deletedProduct ? parseFloat(deletedProduct.price) : undefined,
+        catalog_size_after: Math.max(products.length - 1, 0),
+      });
       toast.success(`Product "${name}" deleted.`);
       refreshData();
     }

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 // 1. Import 'login' from the API service and rename it to 'apiLogin' to avoid conflicts.
 import { login as apiLogin } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { trackEvent } from '../services/pendo';
 
 const Login = () => {
   const [username, setUsername] = useState('');
@@ -19,6 +20,11 @@ const Login = () => {
       
       // 4. On success, call the context's login function with the user data.
       login(data);
+      // Pendo: successful login from the /login page
+      trackEvent('user_logged_in', {
+        user_id: data.id,
+        login_source: 'login_page',
+      });
       
       // 5. Navigate to a protected page.
       navigate('/products');

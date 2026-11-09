@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { register } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { trackEvent } from '../services/pendo';
 
 const Register = () => {
   const [username, setUsername] = useState('');
@@ -24,6 +25,11 @@ const Register = () => {
     try {
       const { data } = await register({ username, password });
       login(data); // Automatically log in after registration
+      // Pendo: account created and user auto-logged in
+      trackEvent('user_registered', {
+        user_id: data.id,
+        registration_source: 'register_page',
+      });
       navigate('/products');
     } catch (error) {
       // Check if the server sent a specific error message
