@@ -5,6 +5,16 @@ import App from './App';
 import reportWebVitals from './reportWebVitals';
 import { ThemeProvider } from "./context/ThemeContext"; // <-- import ThemeProvider
 
+// Boot Pendo once at app entry with an anonymous visitor; the signed-in user is
+// registered later via pendo.identify in AuthContext.
+if (window.pendo) {
+  window.pendo.initialize({
+    visitor: {
+      id: ''
+    }
+  });
+}
+
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
