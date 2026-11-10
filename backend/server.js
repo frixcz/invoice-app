@@ -7,6 +7,7 @@ const { generateInvoicePDF } = require('./services/pdfService');
 const { sendInvoiceEmail } = require('./services/emailService');
 const { User } = require('./database'); // <-- Import User model
 const { protect } = require('./middleware/authMiddleware'); // <-- Import auth middleware
+const { trackEvent } = require('./services/pendoService');
 const { Op } = require('sequelize');
 
 const { startOfDay, endOfDay, subDays, startOfMonth, endOfMonth } = require('date-fns');
@@ -81,6 +82,12 @@ app.post('/api/users/register', async (req, res) => {
     const user = await User.create({ username, password: hashedPassword });
 
     if (user) {
+        // Pendo: a new user account was created.
+        trackEvent('Account registered', {
+            visitorId: user.id,
+            properties: { registration_method: 'username_password' },
+        });
+
         res.status(201).json({
             id: user.id,
             username: user.username,
@@ -97,6 +104,12 @@ app.post('/api/users/login', async (req, res) => {
     const user = await User.findOne({ where: { username } });
 
     if (user && (await bcrypt.compare(password, user.password))) {
+        // Pendo: credentials were verified and a session token is being issued.
+        trackEvent('Logged in', {
+            visitorId: user.id,
+            properties: { login_method: 'username_password' },
+        });
+
         res.json({
             id: user.id,
             username: user.username,
@@ -127,6 +140,12 @@ app.delete('/api/products/:id', protect, async (req, res) => {
             where: { id: req.params.id }
         });
         if (deleted) {
+            // Pendo: the product was removed from the database.
+            trackEvent('Product deleted', {
+                visitorId: req.user && req.user.id,
+                properties: { product_db_id: String(req.params.id) },
+            });
+
             res.status(204).send(); // No Content
         } else {
             res.status(404).json({ error: 'Product not found' });
@@ -157,6 +176,19 @@ app.post('/api/products', protect, async (req, res) => {
         // --- MODIFIED: Include productId and category ---
         const { name, price, tax, productId, category } = req.body;
         const product = await Product.create({ name, price, tax, productId, category });
+
+        // Pendo: the new product was saved.
+        trackEvent('Product created', {
+            visitorId: req.user && req.user.id,
+            properties: {
+                product_db_id: String(product.id),
+                product_code: product.productId != null ? String(product.productId) : '',
+                category: product.category || 'uncategorized',
+                price: parseFloat(product.price) || 0,
+                tax_rate: parseFloat(product.tax) || 0,
+            },
+        });
+
         res.status(201).json(product);
     } catch (error) {
         // Provide a more specific error for unique constraint violation
@@ -178,6 +210,19 @@ app.put('/api/products/:id', protect, async (req, res) => {
 
         if (updated) {
             const updatedProduct = await Product.findByPk(req.params.id);
+
+            // Pendo: the product's changes were saved.
+            trackEvent('Product updated', {
+                visitorId: req.user && req.user.id,
+                properties: {
+                    product_db_id: String(req.params.id),
+                    product_code: updatedProduct && updatedProduct.productId != null ? String(updatedProduct.productId) : '',
+                    category: (updatedProduct && updatedProduct.category) || 'uncategorized',
+                    price: updatedProduct ? parseFloat(updatedProduct.price) || 0 : 0,
+                    tax_rate: updatedProduct ? parseFloat(updatedProduct.tax) || 0 : 0,
+                },
+            });
+
             res.status(200).json(updatedProduct);
         } else {
             res.status(404).json({ error: 'Product not found' });
@@ -205,6 +250,8 @@ app.post('/api/invoices', async (req, res) => {
 
   const t = await sequelize.transaction();
   let newInvoice;
+  let customerRecordId;
+  let customerAction = null; // 'created' | 'updated' | null (unchanged), reported to Pendo after commit
 
 //   try {
 //     // === Part 1: Database Transaction ===
@@ -223,6 +270,10 @@ try {
       defaults: { name: customer.name, email: customer.email || null },
       transaction: t
     });
+    customerRecordId = customerRecord.id;
+    if (created) {
+      customerAction = 'created';
+    }
 
     // If the customer was found (not created) and the details from the form are different, update them.
     if (!created && (customerRecord.name !== customer.name || customerRecord.email !== (customer.email || null))) {
@@ -230,6 +281,7 @@ try {
       customerRecord.email = customer.email || null;
       // Save the changes within the same transaction.
       await customerRecord.save({ transaction: t });
+      customerAction = 'updated';
     }
 
     // (The rest of the transaction logic remains the same)
@@ -257,6 +309,36 @@ try {
     
     await t.commit(); // The invoice is now safely in the database.
 
+    // Pendo: the invoice and its line items were committed and an INV- number assigned.
+    // POST /api/invoices is unauthenticated, so no user id is available here ("system" fallback).
+    trackEvent('Invoice created', {
+      properties: {
+        invoice_id: String(newInvoice.id),
+        invoice_number: newInvoice.invoiceNumber,
+        item_count: invoiceItemsData.length,
+        total_quantity: invoiceItemsData.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0),
+        subtotal: Number(subtotal.toFixed(2)),
+        tax: Number(totalTax.toFixed(2)),
+        discount: Number(discount) || 0,
+        grand_total: Number(grandTotal.toFixed(2)),
+        has_email: Boolean(customer.email),
+        is_new_customer: customerAction === 'created',
+      },
+    });
+
+    // Pendo: a customer was created from a new phone number or an existing one's details changed.
+    if (customerAction) {
+      trackEvent('Customer record created or updated', {
+        properties: {
+          customer_id: String(customerRecordId),
+          customer_action: customerAction,
+          is_new_customer: customerAction === 'created',
+          has_email: Boolean(customer.email),
+          invoice_id: String(newInvoice.id),
+        },
+      });
+    }
+
   } catch (error) {
     await t.rollback();
     console.error('Invoice creation failed during transaction:', error);
@@ -279,6 +361,15 @@ try {
     };
       const pdfBuffer = await generateInvoicePDF(finalInvoiceData);
       await sendInvoiceEmail(customer.email, newInvoice.invoiceNumber, pdfBuffer);
+
+      // Pendo: the PDF invoice was generated and emailed to the customer on creation.
+      trackEvent('Invoice emailed on creation', {
+        properties: {
+          invoice_id: String(newInvoice.id),
+          invoice_number: newInvoice.invoiceNumber,
+          pdf_size_kb: Math.round(pdfBuffer.length / 1024),
+        },
+      });
     }
 
     res.status(201).json({
@@ -367,6 +458,17 @@ app.get('/api/invoices/:id/pdf', protect, async (req, res) => {
         res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.invoiceNumber}.pdf"`);
         res.send(pdfBuffer);
 
+        // Pendo: the invoice PDF was generated and returned as an attachment.
+        trackEvent('Invoice PDF downloaded', {
+            visitorId: req.user && req.user.id,
+            properties: {
+                invoice_id: String(invoice.id),
+                invoice_number: invoice.invoiceNumber,
+                item_count: items.length,
+                pdf_size_kb: Math.round(pdfBuffer.length / 1024),
+            },
+        });
+
     } catch (error) {
         console.error("Failed to generate PDF for download:", error);
         res.status(500).json({ error: 'Failed to generate PDF' });
@@ -408,6 +510,16 @@ app.post('/api/invoices/:id/resend', protect, async (req, res) => {
         // Send the email using the existing email service
         await sendInvoiceEmail(invoice.Customer.email, invoice.invoiceNumber, pdfBuffer);
 
+        // Pendo: the invoice PDF was regenerated and emailed successfully.
+        trackEvent('Invoice email resent', {
+            visitorId: req.user && req.user.id,
+            properties: {
+                invoice_id: String(invoice.id),
+                invoice_number: invoice.invoiceNumber,
+                pdf_size_kb: Math.round(pdfBuffer.length / 1024),
+            },
+        });
+
         res.status(200).json({ message: 'Invoice email resent successfully!' });
 
     } catch (error) {
@@ -435,7 +547,10 @@ app.post('/api/invoices/:id/send-whatsapp', protect, async (req, res) => {
     }
 
     // 4. Send the WhatsApp message using the retrieved link
-    await sendInvoiceWhatsApp(invoice.Customer.phone, invoice.invoiceNumber, directLink);
+    await sendInvoiceWhatsApp(invoice.Customer.phone, invoice.invoiceNumber, directLink, {
+      visitorId: req.user && req.user.id,
+      invoiceId: String(invoice.id),
+    });
 
     res.status(200).json({ message: `WhatsApp message sent successfully to ${invoice.Customer.name}!` });
 
@@ -466,7 +581,19 @@ app.post('/api/invoices/:id/upload', protect, async (req, res) => {
     if (!directLink) { throw new Error("Failed to convert Google Drive link."); }
 
     // 4. Update the database with the new link
+    const hadPreviousPdfUrl = Boolean(invoice.pdfUrl);
     await invoice.update({ pdfUrl: directLink });
+
+    // Pendo: the PDF was uploaded, shared, and its direct Drive link saved on the invoice.
+    trackEvent('Invoice uploaded to Drive', {
+      visitorId: req.user && req.user.id,
+      properties: {
+        invoice_id: String(invoice.id),
+        invoice_number: invoice.invoiceNumber,
+        is_reupload: hadPreviousPdfUrl,
+        pdf_size_kb: Math.round(pdfBuffer.length / 1024),
+      },
+    });
 
     res.status(200).json({
       message: 'File uploaded and shared successfully!',
