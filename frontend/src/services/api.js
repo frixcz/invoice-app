@@ -122,7 +122,7 @@ export const setupAxiosInterceptors = (onUnauthorized) => {
     (error) => {
       // If the response is a 401 Unauthorized error
       if (error.response && error.response.status === 401) {
-        onUnauthorized(); // Call the function we passed from App.js
+        onUnauthorized(error); // Call the function we passed from App.js
       }
       // Return the error to be handled by the component that made the call
       return Promise.reject(error);

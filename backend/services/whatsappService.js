@@ -1,6 +1,7 @@
 const twilio = require('twilio');
 // Import and configure dotenv to read variables from the .env file.
 require('dotenv').config();
+const { trackEvent } = require('./pendoService');
 
 // Initialize the Twilio client with your Account SID and Auth Token.
 // These are securely read from the environment variables.
@@ -15,10 +16,11 @@ const client = twilio(
  * @param {string} customerPhone The customer's phone number in E.164 format (e.g., "+919876543210").
  * @param {string} invoiceNumber The invoice number to include in the message body.
  * @param {string} pdfUrl The publicly accessible URL of the PDF file to be sent.
+ * @param {object} [trackingContext] Optional context for Pendo tracking ({ visitorId, invoiceId }).
  * @returns {Promise<void>} A promise that resolves when the message is successfully sent.
  * @throws {Error} Throws an error if the Twilio API call fails.
  */
-async function sendInvoiceWhatsApp(customerPhone, invoiceNumber, pdfUrl) {
+async function sendInvoiceWhatsApp(customerPhone, invoiceNumber, pdfUrl, trackingContext = {}) {
   // Use a try...catch block to handle potential errors from the external API call.
   try {
     // Format the phone numbers correctly for the Twilio WhatsApp API.
@@ -39,10 +41,21 @@ async function sendInvoiceWhatsApp(customerPhone, invoiceNumber, pdfUrl) {
     };
 
     // Make the asynchronous API call to Twilio to send the message.
-    await client.messages.create(messagePayload);
+    const message = await client.messages.create(messagePayload);
 
     // Log a success message to the server console for debugging and records.
     console.log(`WhatsApp message sent successfully to ${customerPhone}`);
+
+    // Pendo: the WhatsApp message with the invoice link was handed to Twilio successfully.
+    trackEvent('WhatsApp invoice sent', {
+      visitorId: trackingContext.visitorId,
+      properties: {
+        invoice_id: trackingContext.invoiceId,
+        invoice_number: invoiceNumber,
+        channel: 'whatsapp',
+        twilio_status: message && message.status ? message.status : 'unknown',
+      },
+    });
 
   } catch (error) {
     // If an error occurs, log the detailed error message from Twilio.

@@ -49,7 +49,18 @@ const GlobalAuthListener = () => {
 
     useEffect(() => {
         // This sets up the interceptor that listens for 401 errors from the API
-        setupAxiosInterceptors(() => {
+        setupAxiosInterceptors((error) => {
+            // Pendo: an API call was rejected as unauthorized and the user is being logged out.
+            // Only fire while a user is still stored, so concurrent 401s (or duplicate interceptors)
+            // report a single expiry. Must run before logout(), which clears the Pendo session.
+            if (localStorage.getItem('user') && window.pendo && typeof window.pendo.track === 'function') {
+                window.pendo.track('Session expired', {
+                    page_path: window.location.pathname,
+                    request_method: (error?.config?.method || 'unknown').toUpperCase(),
+                    request_endpoint: (error?.config?.url || 'unknown').split('?')[0].replace(/\/\d+(?=\/|$)/g, '/:id'),
+                    status_code: 401,
+                });
+            }
             logout();
             openLoginModal();
             toast.error("Your session has expired. Please log in again.");
